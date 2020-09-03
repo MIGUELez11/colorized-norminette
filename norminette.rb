@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 
 require 'bundler'
+require 'colorize'
 require 'optparse'
 require 'parseconfig'
 require 'securerandom'
@@ -8,11 +9,11 @@ require 'securerandom'
 $current_path = Dir.pwd
 
 if File.symlink?(__FILE__)
-	    dir = File.expand_path(File.dirname(File.readlink(__FILE__)))
-			Dir.chdir dir
+	dir = File.expand_path(File.dirname(File.readlink(__FILE__)))
+	Dir.chdir dir
 else
-	    dir = File.expand_path(File.dirname(__FILE__))
-		    Dir.chdir dir
+	dir = File.expand_path(File.dirname(__FILE__))
+	Dir.chdir dir
 end
 
 $config = ParseConfig.new("#{dir}/config.conf")
@@ -22,10 +23,10 @@ Bundler.require
 class Sender
 	def initialize &block
 		@conn = Bunny.new 	hostname: 	$config['hostname'],
-							vhost: 		"/",
-							user: 		$config['user'],
-							password: 	$config['password']
-		
+			vhost: 		"/",
+			user: 		$config['user'],
+			password: 	$config['password']
+
 		@conn.start
 		@ch 			= @conn.create_channel
 		@x  			= @ch.default_exchange
@@ -38,10 +39,10 @@ class Sender
 		@reply_queue.subscribe do |delivery_info, properties, payload|
 			@counter -= 1
 			block.call delivery_info, properties, payload
-	    	@lock.synchronize { @condition.signal }
-	  	end
+			@lock.synchronize { @condition.signal }
+		end
 
-	  	at_exit { desinitialize }
+		at_exit { desinitialize }
 	end
 
 	def desinitialize
@@ -52,8 +53,8 @@ class Sender
 	def publish content
 		@counter += 1
 		@x.publish content,	routing_key:  @routing_key,
-							reply_to:     @reply_queue.name,
-							correlation_id: SecureRandom.uuid
+			reply_to:     @reply_queue.name,
+			correlation_id: SecureRandom.uuid
 	end
 
 	def sync_if_needed
@@ -71,7 +72,7 @@ class Norminette
 	def initialize
 		@files			= []
 		@sender 		= Sender.new do |delivery_info, properties, payload|
-	    	manage_result JSON.parse(payload)
+			manage_result JSON.parse(payload)
 		end
 	end
 
@@ -116,7 +117,7 @@ class Norminette
 
 	def populate_file file
 		unless is_a_valid_file? file
-			manage_result 'filename' => file, 'display' => "Warning: Not a valid file"
+			manage_result 'filename' => file, 'warning' => "Warning: Not a valid file"
 			return
 		end
 
@@ -143,44 +144,52 @@ class Norminette
 	end
 
 	def manage_result result
-		puts "Norme: #{cleanify_path(result['filename'])}" 	if result['filename']
-		puts result['display']	 							if result['display']
+		if result['filename'] && !result['warning'] && !result['display']
+			puts "Norme: #{cleanify_path(result['filename'])}".green
+		elsif result['filename'] && result['warning']
+			puts "Norme: #{cleanify_path(result['filename'])}".yellow
+		elsif result['filename'] && result['display']
+			puts "Norme: #{cleanify_path(result['filename'])}".red
+		else
+			puts "Norme: #{cleanify_path(result['filename'])}"
+		end
+		puts result['warning'] + "\n\n"						if result['warning']
+		puts result['display']	+ "\n\n" 					if result['display']
 		exit 0 												if result['stop'] == true
 	end
 end
 
 class Parser
-  def self.parse(options)
-  	args 	= OpenStruct.new
-    opt_parser = OptionParser.new do |opts|
-      opts.banner = "Usage: #$0 [options] [files_or_directories]"
+	def self.parse(options)
+		args 	= OpenStruct.new
+		opt_parser = OptionParser.new do |opts|
+			opts.banner = "Usage: #$0 [options] [files_or_directories]"
 
-      opts.on("-v", "--version", "Print version") do |n|
-      	args.version = true
-      end
+			opts.on("-v", "--version", "Print version") do |n|
+				args.version = true
+			end
 
-      opts.on("-R", "--rules Array", Array, "Rule to disable") do |rules|
-      	args.rules = rules
-      end
+			opts.on("-R", "--rules Array", Array, "Rule to disable") do |rules|
+				args.rules = rules
+			end
 
-      opts.on("-h", "--help", "Prints this help") do
-  		sender 	= Sender.new do |delivery_info, properties, payload|
-  			puts JSON.parse(payload)['display']
+			opts.on("-h", "--help", "Prints this help") do
+				sender 	= Sender.new do |delivery_info, properties, payload|
+					puts JSON.parse(payload)['display']
+				end
+
+				puts opts
+				puts "Norminette usage:"
+				sender.publish({action: "help"}.to_json)
+				sender.sync
+				exit
+			end
 		end
 
-        puts opts
-        puts "Norminette usage:"
-        sender.publish({action: "help"}.to_json)
-        sender.sync
-        exit
-      end
-    end
+		opt_parser.parse!(options) rescue abort $!.to_s
 
-    opt_parser.parse!(options) rescue abort $!.to_s
-
-    return args
-  end
+		return args
+	end
 end
 
 Norminette.new.check ARGV, Parser.parse(ARGV) if __FILE__ == $0
-
